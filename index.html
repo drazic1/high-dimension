@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html>
+<meta charset="utf-8">
+
+<!-- Example based on http://bl.ocks.org/mbostock/3887118 -->
+<!-- Tooltip example from http://www.d3noob.org/2013/01/adding-tooltips-to-d3js-graph.html -->
+
+<style>
+  body {
+    font: 11px sans-serif;
+  }
+  h1 {
+    font: 10px"Helvetica Neue";
+    font-weight: bold;
+  }
+  .axis path {
+    display: none;
+  }
+  .axis line {
+    fill: none;
+    stroke: #000;
+    shape-rendering: crispEdges;
+  }
+  .dot {
+    /*stroke: #000;*/
+  }
+  .extent {
+    fill: #000;
+    fill-opacity: .125;
+    stroke: #fff;
+  }
+  .tooltip {
+    position: absolute;
+    width: 200px;
+    height: 28px;
+    pointer-events: none;
+  }
+  .label {
+    font: 7px"Helvetica Neue";
+  }
+
+</style>
+
+<body>
+
+<!--
+  <script src="javascripts/d3.v3.min.js"></script>
+  <script src="javascripts/crossfilter.js"></script>
+  <script src="javascripts/jquery-1.10.2.js"></script>
+  <script src="javascripts/jquery-ui.js"></script>
+  <link rel="stylesheet" href="javascripts/jquery-ui.css">  
+-->
+
+  <script src="http://d3js.org/d3.v3.min.js"></script>
+  <script src="crossfilter.js"></script>
+
+
+
+  <h1 id='scatterplot_matrix'>High Dimension Datasets
+
+<select id="dataset_selector", onchange="load_data()">
+  <option value="diabetes">Diabetes Dataset</option>
+  <option value="income">Income Dataset</option>
+</select>
+
+<select id="order_selector", onchange="main(true)">
+  <option value="defect">Default</option>
+  <option value="data_type">Data Type</option>
+</select>
+
+<button type="button" onclick="reset_filter()">Reset</button>
+
+
+
+ <div id="slider-box" style="left: 50%; width:25%; visibility:hidden">
+  <p></p>
+  <div id="slider-range"></div>
+  <label for="amount">Range:</label>
+  <input type="text" id="numerical_category" readonly style="border:0; color:#000; font-weight:bold;">
+  <button type="button" onclick="apply_numerical_filter()">Apply</button>
+  <input type="text" id="amount" readonly style="border:0; color:#f6931f; font-weight:bold;">
+</div>
+
+</h1>
+  <script>
+    var margin = {
+      top: 10,
+      right: 50,
+      bottom: 5,
+      left: 5
+    },
+      width = 1400 - margin.left - margin.right,
+      height = 700 - margin.top - margin.bottom,
+      glyph_height = 160,
+      glyph_width = 55,
+      columns = 16,
+      rows = 3
+      glyph_panel_width = (glyph_width + margin.left) * columns;
+    
+    /* 
+     * value accessor - returns the value to encode for a given data object.
+     * scale - maps value to a visual display encoding, such as a pixel position.
+     * map function - maps from data value to display value
+     * axis - sets up axis
+     */
+
+
+    var color = d3.scale.ordinal().range(['rgb(141,211,199)','rgb(251,128,114)']).domain(["No","Yes"]);
+    
+    var loaded_data;
+    var category_type;
+        load_data();
+
+     // add the tooltip area to the webpage
+    var tooltip = d3.select("body").append("div")
+      .attr("class", "tooltip")
+      .style("opacity", 0);
+
+    function load_data(){
+      d3.select("svg").remove();
+      var dataset = document.getElementById("dataset_selector").value;
+      if(dataset == "diabetes"){
+        target_variable = "diabetesMed";
+        cValue = function(d) {
+          return d["diabetesMed"];
+        }
+        // load data
+        d3.json("diabetesCF3k.json", function(error, data) { //diabetic_data.csv
+          loaded_data = data;
+            // load category list
+            d3.json("diabetes_category_type.json", function(error, types) { 
+              category_type = types;
+              main(false);
+            });
+        });
+      } else if (dataset == "income"){
+        target_variable = "target";
+        cValue = function(d) {
+          return d["instance_weight"];
+        }
+        // load data
+        d3.json("incomeCF3k.json", function(error, data) { //diabetic_data.csv
+          loaded_data = data;
+            // load category list
+            d3.json("income_category_type.json", function(error, types) { 
+              category_type = types;
+              main(false);
+            });
+        });
+      }
+    }
+
+    function main(updating) {      
+      if (updating == true) {
+        d3.select("svg").remove();
+      }
+
+      if(document.getElementById("dataset_selector").value == "income"){
+        for (var i = 0; i < loaded_data.length; i++) {
+          var v = loaded_data[i];
+          if(v["instance_weight"]>2000){
+            v["target"]="Yes";
+          } else {
+            v["target"]="No";
+          }
+        };
+      }
+
+      // add the graph canvas to the body of the webpage
+      var svg = d3.select("body").append("svg")
+        .attr("width", width + margin.left * 2 + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform", "translate(" + margin.left * 2 + "," + margin.top/2 + ")");
+
+      // add the navigation area to the webpage
+      var navigation_box = svg.append("g").attr("class", "navigation_box");
+
+      var order = document.getElementById("order_selector").value;
+      var dataset = document.getElementById("dataset_selector").value;
+      var keys = sort_glyphs(dataset,order);
+      var data_cf = crossfilter(loaded_data);
+      var number_of_records = loaded_data.length;
+      //keys = sort_glyphs();
+      var glyphs = svg.append("g").attr("class", "glyphs").attr("width", glyph_panel_width);
+      var counter = 0;
+      //Create 49 g elemets to represent all the scatterplots
+      for (var row = 0; row < rows; row++) {
+      
+        //calculate y_position for the glyph according to longest glyph on upper row
+        if(row>0){
+          var y_pos = 0;
+          for (var column = 0; column < columns; column++) {
+            var glyph_on_top = glyphs.select(".miniscatter.column"+(column)+".row"+(row-1))[0][0];
+            if(Number(glyph_on_top.attributes.size.value) + Number(glyph_on_top.attributes.y_pos.value) + margin.bottom > y_pos){
+              y_pos = Number(glyph_on_top.attributes.size.value) + Number(glyph_on_top.attributes.y_pos.value) + margin.bottom;
+            }
+          };
+        } else {
+          var y_pos = 0;
+        }
+
+        for (var column = 0; column < columns; column++) {
+          if (keys[counter] != undefined) { //to try to draw only as many glyphs as we have in the data
+             
+            var cf_dimension = data_cf.dimension(function(d) {
+              return d[keys[counter]];
+            })
+            var possible_categorical_values = cf_dimension.group();
+
+            if(category_type[keys[counter]] == "discrete"){
+              var possible_categorical_values_sorted = possible_categorical_values.top(Infinity).sort(function(a, b) {
+                //console.log(a.val);
+                return b.value - a.value;
+              });
+            } else {
+              var possible_categorical_values_sorted = possible_categorical_values.top(Infinity).sort(function(a, b) {
+                //console.log(a.val);
+                return a.key - b.key;
+              });
+            }
+
+            //calculate y_position for the glyph according to glyph on top
+            /*if(row>0){
+              var glyph_on_top = glyphs.select(".miniscatter.column"+(column)+".row"+(row-1))[0][0];
+              var y_pos = Number(glyph_on_top.attributes.size.value) + Number(glyph_on_top.attributes.y_pos.value) + margin.bottom;
+            } else {
+              var y_pos = 0;
+            }*/
+
+            var x_pos = column * (glyph_width + margin.left);
+            var scatterplot = glyphs.append("svg:g")
+              .attr("class", "miniscatter "+keys[counter]+" row"+row+" column"+column)
+              .attr("x_pos",x_pos)
+              .attr("y_pos",y_pos)
+              .attr("size",glyph_height)
+              .attr("transform", "translate(" + x_pos + "," + y_pos + ")");
+
+            // setup x 
+            var xValue = function(d) {
+              return d[keys[counter]];
+            }, // data -> value
+              xScale = d3.scale.linear().range([0, glyph_width]), // value -> display
+              xMap = function(d) {
+                return xScale(Math.random());
+              }, // data -> display
+              xAxis = d3.svg.axis().scale(xScale).orient("bottom").ticks([]);
+            // setup y
+            var yValue = function(d) {
+              return d[keys[counter]];
+            }, // data -> value
+              yScale = d3.scale.linear().range([glyph_height, 0]), // value -> display
+              yMap = function(d) {
+                return yScale(yValue(d));
+              }, // data -> display
+              yAxis = d3.svg.axis().scale(yScale).orient("left").tickValues([]);;
+
+            // change the scale somain for each glyph don't want dots overlapping axis, so add in buffer to data domain
+            xScale.domain([0, 1]);
+
+            var domain = [];
+            var y_range = {};
+            var x_range = {}; //to split each line into two categories. percentage of positive patients for each category
+            var x_range_2 = {}; //for violin plot. number of patients for each category
+            var cursor = 0; // stores the value of the last y_position for each bin in the glyph
+            
+            //Treemaps for categorical variables
+            if (category_type[keys[counter]] == "categorical") {
+              
+              for (var l = 0; l < possible_categorical_values_sorted.length; l++) {
+                var key = possible_categorical_values_sorted[l].key;
+                var patients_in_each_category = cf_dimension.filter(possible_categorical_values_sorted[l].key).top(Infinity);
+                var tested_positive = 0;
+
+              for (var m = 0; m < patients_in_each_category.length; m++) {
+                if (patients_in_each_category[m][target_variable] == "Yes") {
+                  tested_positive++;
+                }
+              }
+
+              var tested_negative = patients_in_each_category.length-tested_positive;
+
+              possible_categorical_values_sorted[l].children=[{key:"Yes", value: tested_positive },{key:"No", value: tested_negative }]
+              }
+
+              var tree = {
+                  key: "root",
+                  children: possible_categorical_values_sorted};
+
+              var color_treemap = d3.scale.category20c();
+
+              var treemap = d3.layout.treemap()
+                .size([glyph_width*3, glyph_height])
+                .sticky(true)
+                .value(function(d) { return d.value; });
+
+              var node = scatterplot.datum(tree).selectAll(".node")
+                .data(treemap.nodes)
+              .enter().append("rect")
+                .attr("class", function(d) { 
+                  if(d.key == "Yes"){
+                    return "node bin filtered target_positive"
+                  } else if (d.key == "No"){
+                    return  "node bin filtered target_negative"
+                  }else{
+                    return  "node bin"
+                  }; 
+                })
+                .attr("x", function(d) { return d.x; })
+                .attr("y", function(d) { return d.y; })
+                .attr("width", function(d) { return Math.max(0, d.dx); })
+                .attr("original_width", function(d) { return Math.max(0, d.dx); })
+                .attr("height", function(d) { return Math.max(0, d.dy); })
+                .attr("number_of_elements", function(d) { return d.value; })
+                .attr("category", keys[counter])
+                .attr("value", function(d) { 
+                  if(d.key == "Yes" || d.key == "No"){
+                    return d.parent.key;
+                  }else {
+                    return d.key;
+                  }  
+                })
+                .style("stroke", "#000")
+                .style("stroke-width", function(d) {
+                  if( d.key != "Yes" && d.key != "No" ){
+                    return .7
+                  } else {
+                    return 0; 
+                  }
+                })
+                .style("fill", function(d) {
+                  console.log(d.key)
+                  if( d.key != "Yes" && d.key != "No" ){
+                    return "none"
+                  } else {
+                    return color(d.key); 
+                  }
+                }).on("click", function(d) {
+                  var selected_value = this.attributes.value.value;
+                  var selected_category = this.attributes.category.value;
+
+                  glyphs.selectAll("circle").style("fill", function(d) {
+                    if (d[selected_category] == selected_value) {
+                      return color(loaded_data[this.attributes.position.value][target_variable]);
+                    } else {
+                      return "grey"
+                    }
+                  }).style("fill-opacity", function(d) {
+                    if (d[selected_category] == selected_value) {
+                      return .4;
+                    } else {
+                      return .1
+                    }
+                  });
+                  console.log(this.classList)
+                  if(this.classList.contains("target_positive")){
+                    glyphs.selectAll(".bin.target_positive.filtered").transition().duration(500).attr("width", function(){
+                      var category = this.attributes.category.value;
+                      var value = this.attributes.value.value;
+                      var number_of_elements = this.attributes.number_of_elements.value;
+                      var counter = 0;
+                      console.log(selected_category,selected_value,category,value)
+                      for (var i = 0; i < loaded_data.length; i++) {
+                        if(loaded_data[i][selected_category] == selected_value && loaded_data[i][category] == value && loaded_data[i][target_variable] == "Yes"){
+                          counter++;
+                        }
+                      };
+                      console.log(category,value,number_of_elements,counter);
+                      return this.attributes.original_width.value*(counter/number_of_elements);
+                    });
+                    glyphs.selectAll(".bin.target_negative.filtered").transition().duration(500).attr("width",0);
+                  }else if (this.classList.contains("target_negative")) {
+                    glyphs.selectAll(".bin.target_negative.filtered").transition().duration(500).attr("width", function(){
+                      var category = this.attributes.category.value;
+                      var value = this.attributes.value.value;
+                      var number_of_elements = this.attributes.number_of_elements.value;
+                      var counter = 0;
+                      console.log(selected_category,selected_value,category,value)
+                      for (var i = 0; i < loaded_data.length; i++) {
+                        if(loaded_data[i][selected_category] == selected_value && loaded_data[i][category] == value && loaded_data[i][target_variable] == "No"){
+                          counter++;
+                        }
+                      };
+                      console.log(category,value,number_of_elements,counter);
+                      return this.attributes.original_width.value*(counter/number_of_elements);
+                    });
+                    glyphs.selectAll(".bin.target_positive.filtered").transition().duration(500).attr("width",0);
+                  }
+
+                  
+
+                });
+            }
+
+            for (var l = 0; l < possible_categorical_values_sorted.length; l++) {
+              var key = possible_categorical_values_sorted[l].key;
+              y_range[key] = [cursor, Math.max((possible_categorical_values_sorted[l].value * glyph_height / number_of_records),2) + cursor];
+              cursor += Math.max((possible_categorical_values_sorted[l].value * glyph_height / number_of_records),2);
+              domain.push(key);
+
+              var patients_in_each_category = cf_dimension.filter(possible_categorical_values_sorted[l].key).top(Infinity);
+              var tested_positive = 0;
+              for (var m = 0; m < patients_in_each_category.length; m++) {
+                if (patients_in_each_category[m][target_variable] == "Yes") {
+                  tested_positive++;
+                }
+              };
+
+              x_range[key] = tested_positive / patients_in_each_category.length;
+              x_range_2[key] = patients_in_each_category.length;
+
+              if (category_type[keys[counter]] == "discrete") {
+                
+                //draw first value of target variable
+                scatterplot.append("svg:rect")
+                  .attr("x", 0)
+                  .attr("y", y_range[key][0])
+                  .attr("width", glyph_width * x_range[key])
+                  .attr("height", y_range[key][1] - y_range[key][0])
+                  .attr("class","bin target_positive background")
+                  .attr("value", key)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",tested_positive)
+                  .style("fill", color("Yes"))
+                  .style("fill-opacity", .3)
+                  .on("mouseover", function(d, i) {
+                    // console.log(this) //this references the html element
+                    tooltip.transition()
+                      .duration(200)
+                      .style("opacity", .9);
+                    tooltip.html(this.attributes.category.value + ": " + this.attributes.value.value)
+                      .style("left", (d3.event.pageX + 5) + "px")
+                      .style("top", (d3.event.pageY - 28) + "px");
+                  })
+                  .on("mouseout", function(d) {
+                    tooltip.transition()
+                      .duration(500)
+                      .style("opacity", 0);
+                  })
+                  .on("click", function(d) {
+                    var selected_value = this.attributes.value.value;
+                    var selected_category = this.attributes.category.value;
+                    filter(glyphs, selected_category, selected_value, "Yes");
+                  })
+                  .on("dblclick", function(d) {
+                    zooming(svg,glyphs,d,this);        
+                  });
+
+                scatterplot.append("svg:rect")
+                  .attr("x", 0)
+                  .attr("y", y_range[key][0])
+                  .attr("width", glyph_width * x_range[key])
+                  .attr("original_width", glyph_width * x_range[key])
+                  .attr("height", y_range[key][1] - y_range[key][0])
+                  .attr("class","bin target_positive filtered")
+                  .attr("value", key)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",tested_positive)
+                  .style("fill", color("Yes"))
+                  //.style("stroke", "#none")
+                  //.style("stroke-width", 1.5)
+                  .style("fill-opacity", .7)
+                  .on("mouseover", function(d, i) {
+                    // console.log(this) //this references the html element
+                    tooltip.transition()
+                      .duration(200)
+                      .style("opacity", .9);
+                    tooltip.html(this.attributes.category.value + ": " + this.attributes.value.value)
+                      .style("left", (d3.event.pageX + 5) + "px")
+                      .style("top", (d3.event.pageY - 28) + "px");
+                  })
+                  .on("mouseout", function(d) {
+                    tooltip.transition()
+                      .duration(500)
+                      .style("opacity", 0);
+                  })
+                  .on("click", function(d) {
+                    var selected_value = this.attributes.value.value;
+                    var selected_category = this.attributes.category.value;
+                    filter(glyphs, selected_category, selected_value, "Yes");
+                    /*
+                    glyphs.selectAll("circle").style("fill", function(d) {
+                      if (d[selected_category] == selected_value && d[target_variable] == "Yes") {
+                        return color(loaded_data[this.attributes.position.value][target_variable]);
+                      } else {
+                        return "grey"
+                      }
+                    }).style("fill-opacity", function(d) {
+                      if (d[selected_category] == selected_value) {
+                        return .4;
+                      } else {
+                        return .1
+                      }
+                    });
+
+                    glyphs.selectAll(".bin.target_positive.filtered").transition().duration(500).attr("width", function(){
+                      var category = this.attributes.category.value;
+                      var value = this.attributes.value.value;
+                      var number_of_elements = this.attributes.number_of_elements.value;
+                      var counter = 0;
+                      for (var i = 0; i < loaded_data.length; i++) {
+                        if(loaded_data[i][selected_category] == selected_value && loaded_data[i][category] == value && loaded_data[i][target_variable] == "Yes"){
+                          counter++;
+                        }
+                      };
+                      console.log(category,value,number_of_elements,counter);
+                      return this.attributes.original_width.value*(counter/number_of_elements);
+                    });
+                    glyphs.selectAll(".bin.target_negative.filtered").transition().duration(500).attr("width",0);  
+                    */                  
+                  })
+                  .on("dblclick", function(d) {
+                    zooming(svg,glyphs,d,this);        
+                  });
+
+                //draw second value of target variable
+                scatterplot.append("svg:rect")
+                  .attr("x", glyph_width * x_range[key])
+                  .attr("y", y_range[key][0])
+                  .attr("width", glyph_width * (1-x_range[key]))
+                  .attr("original_width", glyph_width * (1-x_range[key]))
+                  .attr("height", y_range[key][1] - y_range[key][0])
+                  .attr("class","bin target_negative background")
+                  .attr("value", key)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",patients_in_each_category.length-tested_positive)
+                  .style("fill", color("No"))
+                  .style("fill-opacity", .3)
+                  .on("mouseover", function(d, i) {
+                    // console.log(this) //this references the html element
+                    tooltip.transition()
+                      .duration(200)
+                      .style("opacity", .9);
+                    tooltip.html(this.attributes.category.value + ": " + this.attributes.value.value)
+                      .style("left", (d3.event.pageX + 5) + "px")
+                      .style("top", (d3.event.pageY - 28) + "px");
+                  })
+                  .on("mouseout", function(d) {
+                    tooltip.transition()
+                      .duration(500)
+                      .style("opacity", 0);
+                  })
+                  .on("click", function(d) {
+                    var selected_value = this.attributes.value.value;
+                    var selected_category = this.attributes.category.value;
+                    filter(glyphs, selected_category, selected_value, "No");
+                    /*
+                    glyphs.selectAll(".bin.target_negative.filtered").transition().duration(500).attr("width", function(){
+                      return this.attributes.original_width.value;
+                    })
+                    glyphs.selectAll("circle").style("fill", function(d) {
+                        return color(loaded_data[this.attributes.position.value][target_variable]);
+                    }).style("fill-opacity", .4);
+                    */
+                  })
+                  .on("dblclick", function(d) {
+                    zooming(svg,glyphs,d,this);        
+                  });
+
+                scatterplot.append("svg:rect")
+                  .attr("x", glyph_width * x_range[key])
+                  .attr("y", y_range[key][0])
+                  .attr("width", glyph_width * (1-x_range[key]))
+                  .attr("original_width", glyph_width * (1-x_range[key]))
+                  .attr("height", y_range[key][1] - y_range[key][0])
+                  .attr("class","bin target_negative filtered")
+                  .attr("value", key)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",patients_in_each_category.length-tested_positive)
+                  .style("fill", color("No"))
+                  .style("fill-opacity", .7)
+                  .on("mouseover", function(d, i) {
+                    // console.log(this) //this references the html element
+                    tooltip.transition()
+                      .duration(200)
+                      .style("opacity", .9);
+                    tooltip.html(this.attributes.category.value + ": " + this.attributes.value.value)
+                      .style("left", (d3.event.pageX + 5) + "px")
+                      .style("top", (d3.event.pageY - 28) + "px");
+                  })
+                  .on("mouseout", function(d) {
+                    tooltip.transition()
+                      .duration(500)
+                      .style("opacity", 0);
+                  })
+                  //.style("stroke", "#none")
+                  //.style("stroke-width", 1.5)
+                  .on("click", function(d) {
+                    var selected_value = this.attributes.value.value;
+                    var selected_category = this.attributes.category.value;
+                    filter(glyphs, selected_category, selected_value, "No");
+                    /*
+                    glyphs.selectAll("circle").style("fill", function(d) {
+                      if (d[selected_category] == selected_value && d[target_variable] == "No") {
+                        return color(loaded_data[this.attributes.position.value][target_variable]);
+                      } else {
+                        return "grey"
+                      }
+                    }).style("fill-opacity", function(d) {
+                      if (d[selected_category] == selected_value) {
+                        return .4;
+                      } else {
+                        return .1
+                      }
+                    });
+                    glyphs.selectAll(".bin.target_negative.filtered").transition().duration(500).attr("width", function(){
+                      var category = this.attributes.category.value;
+                      var value = this.attributes.value.value;
+                      var number_of_elements = this.attributes.number_of_elements.value;
+                      var counter = 0;
+                      for (var i = 0; i < loaded_data.length; i++) {
+                        if(loaded_data[i][selected_category] == selected_value && loaded_data[i][category] == value && loaded_data[i][target_variable] == "No"){
+                          counter++;
+                        }
+                      };
+                      console.log(category,value,number_of_elements,counter);
+                      return this.attributes.original_width.value*(counter/number_of_elements);
+                    });
+                    glyphs.selectAll(".bin.target_positive.filtered").transition().duration(500).attr("width",0);
+                    */
+                  })
+                  .on("dblclick", function(d) {
+                    zooming(svg,glyphs,d,this);        
+                  });
+
+                scatterplot.append("svg:line")
+                  .attr("x1", 0)
+                  .attr("y1", y_range[key][1])
+                  .attr("x2", glyph_width)
+                  .attr("y2", y_range[key][1])
+                  .style("fill", "none").style("stroke", "#000").style("stroke-width", 1);
+              } else if (category_type[keys[counter]] == "continuous" && l == possible_categorical_values_sorted.length - 1) { // add transparent rectangle on top of continuos glyphs so when clicked the slider is printed on screen
+                scatterplot.append("svg:rect")
+                  .attr("x", 0)
+                  .attr("y", 0)
+                  .attr("width", glyph_width)
+                  .attr("height", glyph_height)
+                  .attr("value", domain)
+                  .attr("category", keys[counter])
+                  .style("fill", "#fff")
+                //.style("stroke", "#none")
+                //.style("stroke-width", 1.5)
+                .on("click", function(d) {
+                  document.getElementById("slider-box").style.visibility="visible";
+                  //d3.select(this.attributes.value.value)
+                  var range = this.attributes.value.value.split(",").map(Number);
+                  range.sort(function(a, b) {
+                    return a - b
+                  });
+                  var min = range[0]
+                  var max = range[range.length - 1]
+                  slid(this.attributes.category.value, min, max);
+                  //display slider to select possible values
+                })
+                .on("dblclick", function(d) {
+                  zooming(svg,glyphs,d,this);        
+                });
+              }
+            };
+
+            if(category_type[keys[counter]] == "discrete"){
+              scatterplot.attr("size",cursor);
+              scatterplot.append("svg:rect")
+                .attr("x", 0)
+                .attr("y", 0)
+                .attr("width", glyph_width)
+                .attr("height", cursor)
+                .attr("class", function(d) {
+                  return keys[counter];
+                })
+                .style("fill", "none")
+                .style("stroke", "#aaa")
+                .style("stroke-width", 1.5);
+            } else if (category_type[keys[counter]] == "categorical"){
+              scatterplot.attr("size",cursor);
+              scatterplot.append("svg:rect")
+                .attr("x", 0)
+                .attr("y", 0)
+                .attr("width", 3*glyph_width)
+                .attr("height", glyph_height)
+                .attr("class", function(d) {
+                  return keys[counter];
+                })
+                .style("fill", "none")
+                .style("stroke", "#aaa")
+                .style("stroke-width", 1.5);
+            } else {
+              scatterplot.append("svg:rect")
+                .attr("x", 0)
+                .attr("y", 0)
+                .attr("width", glyph_width)
+                .attr("height", glyph_height)
+                .attr("class", function(d) {
+                  return keys[counter];
+                })
+                .style("fill", "none")
+                .style("stroke", "#aaa")
+                .style("stroke-width", 1.5);
+            }
+            
+
+            if (category_type[keys[counter]] != "continuous") { //if numerical 
+              yScale.domain([d3.min(loaded_data, yValue) - 1, d3.max(loaded_data, yValue) * 1.05]);
+            } else {
+              yScale = d3.scale.ordinal().rangeBands([glyph_height, 0]).domain(domain);
+              yAxis = d3.svg.axis().scale(yScale).orient("left").tickValues([]);
+            }
+
+            // x-axis
+            scatterplot.append("g")
+              .attr("class", "x axis")
+              .attr("transform", "translate(0," + glyph_height + ")")
+              .call(xAxis)
+              .append("text")
+              .attr("class", "label")
+              .attr("x", glyph_height)
+              .attr("y", -6)
+              .style("text-anchor", "end");
+            //.text(keys[counter]);
+
+            // y-axis
+            scatterplot.append("g")
+              .attr("class", "y axis")
+              .call(yAxis)
+              .append("text")
+              .attr("class", "label")
+            //.attr("transform", "rotate(-90)")
+            .attr("transform", "translate(0,-13)")
+              .attr("y", 6)
+              .attr("dy", ".71em")
+            //.style("text-anchor", "end")
+            // .text(keys[counter]);
+
+            if(category_type[keys[counter]] == "continuous"){
+              
+              var sortable = [];
+              var map_positive_x_positions = {}; //contains the x positions of the positive peaks for each value in continuos graphs
+              var map_negative_x_positions = {}; //contains the x positions of the negative peaks for each value in continuos graphs
+              for (var element in x_range_2){
+                sortable.push([element, x_range_2[element]])                
+              }
+              sortable.sort(function(a, b) {return b[1] - a[1]});
+              max_value = sortable[0][1];
+              
+              // draw dots
+              scatterplot.selectAll("circle")
+                .data(loaded_data)
+                .enter().append("circle")
+                .attr("class", function(d, i) {
+                  return "pos" + row + " dot " + keys[counter]
+                })
+                .attr("category", keys[counter])
+                .attr("position", function(d, i) {
+                  return i
+                })
+                .attr("value", function(d, i) {
+                  return d[keys[counter]]
+                })
+                .attr("r", 0)
+              //.attr("cx", xMap) //use for all patients scattered through the bins
+              .attr("cx", function(d, i) {
+                var resize = x_range_2[d[keys[counter]]]*0.9/max_value; //needs correction. 0.9 is hardcoding and it's not working properly
+                var move = x_range[sortable[0][0]];
+                if (d[target_variable] == "No") {
+                  var max = glyph_width * (1-x_range[d[keys[counter]]]);
+                  var min = 0;
+                  var position = (Math.random() * (max - min) + min)*resize + glyph_width*move;
+                  if(map_negative_x_positions[d[keys[counter]]] < position || map_negative_x_positions[d[keys[counter]]] == undefined){
+                    map_negative_x_positions[d[keys[counter]]] = position;
+                  }
+                  return position ;
+                } else {
+                  var max = glyph_width * x_range[d[keys[counter]]];
+                  var min = 0;
+                  var position = -(Math.random() * (max - min) + min)*resize + glyph_width*move;
+                  if(map_positive_x_positions[d[keys[counter]]] > position || map_positive_x_positions[d[keys[counter]]] == undefined){
+                    map_positive_x_positions[d[keys[counter]]] = position;
+                  }
+                  return position;
+                }
+                
+               if (d[target_variable] == "No") {
+                var max = glyph_width * (1-x_range[d[keys[counter]]]);
+                var min = 0;
+                return (Math.random() * (max - min) + min)*resize + glyph_width/2 ;
+                } else {
+                  var max = glyph_width * x_range[d[keys[counter]]];
+                  var min = 0;
+                  return -(Math.random() * (max - min) + min)*resize + glyph_width/2 ;
+                } 
+              })
+              .attr("cy", function(d, i) {
+                if (category_type[keys[counter]] == "continuous") {
+                  return yMap(d);
+                } else {
+                  var min = y_range[d[keys[counter]]][0];
+                  var max = y_range[d[keys[counter]]][1];
+                  return (Math.random() * (max - min) + min);
+                  //max
+                  //min=
+                  //Math.random() * (max - min) + min;
+                }
+              })
+              //.attr("transform", "translate("+ i * (glyph_height/2+margin.left*1.5) + "," + j * (glyph_height+margin.bottom) + ")")
+              .style("fill", function(d, i) {
+                return color(loaded_data[i][target_variable]);
+              })
+              .style("fill-opacity", .4)
+              .on("mouseover", function(d, i) {
+                // console.log(this) //this references the html element
+                tooltip.transition()
+                  .duration(200)
+                  .style("opacity", .9);
+                tooltip.html(this.attributes.category.value + ": " + this.attributes.value.value)
+                  .style("left", (d3.event.pageX + 5) + "px")
+                  .style("top", (d3.event.pageY - 28) + "px");
+              })
+              .on("mouseout", function(d) {
+                tooltip.transition()
+                  .duration(500)
+                  .style("opacity", 0);
+              })
+              /*
+              .on("click", function(d) {
+                var selected_value = this.attributes.value.value;
+                var selected_category = this.attributes.category.value;
+
+                glyphs.selectAll("circle").style("fill", function(d) {
+                  if (d[selected_category] == selected_value) {
+                    return color(loaded_data[this.attributes.position.value][target_variable]);
+                  } else {
+                    return "grey"
+                  }
+                }).style("fill-opacity", function(d) {
+                  if (d[selected_category] == selected_value) {
+                    return .4;
+                  } else {
+                    return .1
+                  }
+                });
+              })
+              */
+              .on("dblclick", function(d) {
+                zooming(svg,glyphs,d,this);        
+              });
+            
+              //console.log("oyyo",map_positive_x_positions, map_negative_x_positions);
+              
+              //Draw paths for violin plots
+              var lineFunction = d3.svg.line()
+                .x(function(d) { return d.x; })
+                .y(function(d) { return yScale(d.y); })
+                .interpolate("linear");
+              
+              map_array = [];
+              for(var v in map_positive_x_positions){
+                map_array.push({"x":map_positive_x_positions[v],"y":v});
+
+                scatterplot.append("line")
+                  .attr("x1", map_positive_x_positions[v])
+                  .attr("y1", yScale(v))
+                  .attr("x2", glyph_width*x_range[sortable[0][0]])
+                  .attr("y2", yScale(v))
+                  .attr("class", "line background target_positive")
+                  .attr("value", v)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",x_range[v]*x_range_2[v])
+                  .attr("stroke-width", .7)
+                  .attr("stroke", "grey")
+                  .attr("original_starting_position",map_positive_x_positions[v])
+                  .attr("original_ending_position", glyph_width*x_range[sortable[0][0]])
+                  .attr("original_length", glyph_width*x_range[sortable[0][0]]-map_positive_x_positions[v]);
+
+                  scatterplot.append("line")
+                  .attr("x1", map_positive_x_positions[v])
+                  .attr("y1", yScale(v))
+                  .attr("x2", glyph_width*x_range[sortable[0][0]])
+                  .attr("y2", yScale(v))
+                  .attr("class", "line filtered target_positive")
+                  .attr("value", v)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",x_range[v]*x_range_2[v])
+                  .attr("stroke-width", .7)
+                  .attr("stroke", color("Yes"))
+                  .attr("original_starting_position",map_positive_x_positions[v])
+                  .attr("original_ending_position", glyph_width*x_range[sortable[0][0]])
+                  .attr("original_length", glyph_width*x_range[sortable[0][0]]-map_positive_x_positions[v]);  
+              }
+
+              map_array.sort(function(a, b) {
+                  return yScale(b.y) - yScale(a.y);
+              });
+
+              var area = d3.svg.area()
+                .x0(function(d) { return d.x; })
+                .x1(glyph_width*x_range[sortable[0][0]])
+                .y(function(d) { return yScale(d.y); });
+
+              scatterplot.append("path")
+                .attr("d", area(map_array))
+                .attr("class","continuous_area")
+                .attr("fill", color("Yes"))
+                .style("fill-opacity",.5);
+
+              scatterplot.append("path")
+                .attr("d", lineFunction(map_array))
+                .attr("stroke", "grey")
+                .attr("stroke-width", .4)
+                .attr("fill", "none")
+
+
+              map_array = [];
+              for(var v in map_negative_x_positions){
+                map_array.push({"x":map_negative_x_positions[v],"y":v});
+                
+                scatterplot.append("line")
+                  .attr("x1", map_negative_x_positions[v])
+                  .attr("y1", yScale(v))
+                  .attr("x2", glyph_width*x_range[sortable[0][0]])
+                  .attr("y2", yScale(v))
+                  .attr("class", "line background target_negative")
+                  .attr("value", v)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",((1-x_range[v])*x_range_2[v]))
+                  .attr("stroke-width", .7)
+                  .attr("stroke", "grey")
+                  .attr("original_starting_position",map_negative_x_positions[v])
+                  .attr("original_ending_position", glyph_width*x_range[sortable[0][0]])
+                  .attr("original_length", map_negative_x_positions[v]-glyph_width*x_range[sortable[0][0]]);  
+
+                scatterplot.append("line")
+                  .attr("x1", map_negative_x_positions[v])
+                  .attr("y1", yScale(v))
+                  .attr("x2", glyph_width*x_range[sortable[0][0]])
+                  .attr("y2", yScale(v))
+                  .attr("class", "line filtered target_negative")
+                  .attr("value", v)
+                  .attr("category", keys[counter])
+                  .attr("number_of_elements",((1-x_range[v])*x_range_2[v]))
+                  .attr("stroke-width", .7)
+                  .attr("stroke", color("No"))
+                  .attr("original_starting_position",map_negative_x_positions[v])
+                  .attr("original_ending_position", glyph_width*x_range[sortable[0][0]])
+                  .attr("original_length", map_negative_x_positions[v]-glyph_width*x_range[sortable[0][0]]);
+              }
+
+              map_array.sort(function(a, b) {
+                  return yScale(b.y) - yScale(a.y);
+              });
+
+              scatterplot.append("path")
+                .attr("d", area(map_array))
+                .attr("class","continuous_area")
+                .attr("fill", color("No"))
+                .style("fill-opacity",.5);
+
+              scatterplot.append("path")
+                .attr("d", lineFunction(map_array))
+                .attr("stroke", "grey")
+                .attr("stroke-width", .4)
+                .attr("fill", "none")  
+
+              scatterplot.selectAll("circle").each(function(d,i){
+                this.parentNode.appendChild(this);
+              });
+
+            }
+
+            //Add navigation Box with list of names of variables
+            /*
+
+            navigation_box.append("g")
+              .attr("class", "navigation")
+              .attr("transform", "translate(0," + (counter * 12) + ")")
+              .append("text")
+              .attr("x", width - 24)
+              .attr("y", 9)
+              .attr("dy", ".35em")
+              .attr("category", function(d) {
+                return keys[counter];
+              })
+              .style("text-anchor", "end")
+              .text(function(d) {
+                return keys[counter];
+              })
+              .on("click", function(d) {
+                var selected_category = this.attributes.category.value;
+                var already_selected_rectangle = glyphs.selectAll("rect").filter("." + selected_category + ".selected");
+
+                if (already_selected_rectangle.size() == 0) {
+                  glyphs.selectAll("rect").filter("." + selected_category).style("stroke", "red").style("stroke-width", 5.5).classed("selected", true);
+                  d3.select(this).style("fill", "red");
+                } else {
+                  already_selected_rectangle.style("stroke", "#aaa").style("stroke-width", 1.5).classed("selected", false);
+                  d3.select(this).style("fill", "black");
+                }
+              });
+
+              */
+
+            var brush = d3.svg.brush()
+              .x(d3.scale.linear().range([glyph_height, 0]).domain([glyph_height, 0]))
+              .y(d3.scale.linear().range([glyph_height, 0]).domain([glyph_height, 0]))
+              .on("brushstart", brushstart)
+              .on("brush", brushmove)
+              .on("brushend", brushend);
+
+            //scatterplot.data(loaded_data[keys[counter]]).enter();
+            //scatterplot.call(brush);
+            counter++;
+            cf_dimension.dispose();
+          }
+        };
+      };
+
+      /****************************
+  BRUSH
+  *****************************/
+
+      var brushCell;
+
+      function brushstart(p) {
+        if (brushCell !== this) {
+          d3.select(brushCell).call(d3.event.target.clear());
+          yScale.domain([glyph_height, 0])
+          //d3.selectAll("circle").style("fill-opacity",.1);
+          brushCell = this;
+        }
+      }
+
+      function brushmove(p) {
+        svg.selectAll("circle").style("fill-opacity", .1).style("fill", "grey");
+        var e = d3.event.target.extent();
+        var y_min = e[0][1];
+        var y_max = e[1][1];
+
+        var selected_category = this.attributes.category.value;
+
+        glyphs.selectAll("circle").style("fill", function(d) {
+          if (this.attributes.cy.value <= y_max && this.attributes.cy.value >= y_min) {
+            return color(loaded_data[this.attributes.position.value][target_variable]);
+          } else {
+            return "grey"
+          }
+        });
+
+        //console.log("move",e[0][1],e[1][1]);
+        //highlight =[];
+        /*
+    svg.selectAll("."+brushCell.getAttribute("category")+"")
+                                    .each(function(d,i){
+                                      //console.log(e[0])
+                                      //console.log(this.attributes.cx.value)
+                                      if(this.attributes.cy.value <= e[1][1] && this.attributes.cy.value >= e[0][1] && this.attributes.cx.value <= e[1][0] && this.attributes.cx.value >= e[0][0]){
+                                        //highlight.push(this.attributes.position.value);
+                                        d3.selectAll(".pos"+this.attributes.position.value+"").style("fill-opacity",.5).style("fill",color(data[i][target_variable]));
+                                      } else {
+                                        d3.selectAll(".pos"+this.attributes.position.value+"").style("fill-opacity",.1).style("fill","grey");
+                                      }
+                                    });//.selectAll("[category=race]");
+
+    //console.log(highlight);
+*/
+      }
+
+      function brushend(p) {
+        if (d3.event.target.empty()) {
+          //svg.selectAll("circle").style("opacity","1");
+          brushCell = null;
+          d3.selectAll("circle").style("fill-opacity", .5).style("fill", function(d) {
+            return color(d[target_variable]);
+          });
+        }
+      }
+
+      /****************************
+  LEGEND
+  *****************************/
+      // draw legend
+      var legend_box = svg.append("g").attr("class", "legend_box").attr("transform", "translate(" + (-(width - glyph_panel_width)) + ",0)");
+
+      var legend = legend_box.selectAll(".legend")
+        .data(color.domain())
+        .enter().append("g")
+        .attr("class", "legend")
+        .attr("transform", function(d, i) {
+          return "translate(0," + ((i * 20) + 420) + ")";
+        });
+
+      // draw legend colored rectangles
+      legend.append("rect")
+        .attr("x", width - 18)
+        .attr("width", 18)
+        .attr("height", 18)
+        .style("fill", color);
+
+      // draw legend text
+      legend.append("text")
+        .attr("x", width - 24)
+        .attr("y", 9)
+        .attr("dy", ".35em")
+        .style("text-anchor", "end")
+        .text(function(d) {
+          return d;
+        })
+
+    }
+
+    function slid(category, x, y) {
+      $("#slider-range").slider({
+        range: true,
+        min: x,
+        max: y,
+        values: [x, y],
+        slide: function(event, ui) {
+          $("#amount").val( ui.values[0] + " - " + ui.values[1]);
+          //paint(category,ui.values[ 0 ],ui.values[ 1 ]);
+        }
+      });
+      $("#numerical_category").val(category);
+      $("#amount").val($("#slider-range").slider("values", 0) +
+        " - " + $("#slider-range").slider("values", 1));
+    };
+
+    function paint(selected_category, min, max) {
+      glyphs.selectAll("circle").style("fill", function(d) {
+        if (d[selected_category] >= min && d[selected_category] <= max) {
+          return color(loaded_data[this.attributes.position.value][target_variable]);
+        } else {
+          return "grey"
+        }
+      }).style("fill-opacity", function(d) {
+        if (d[selected_category] >= min && d[selected_category] <= max) {
+          return .4;
+        } else {
+          return .1
+        }
+      });
+    }
+
+    function reset_filter(){
+      d3.selectAll("circle").style("fill", function(d) {
+        return color(loaded_data[this.attributes.position.value][target_variable]);
+      }).style("fill-opacity", .4);
+
+      d3.selectAll(".bin.filtered").transition().duration(500).attr("width", function(){
+        return this.attributes.original_width.value;
+      });
+
+      d3.selectAll(".line.filtered").transition().duration(500).attr("x1",function(){
+        return this.attributes.original_starting_position.value;
+      });
+
+      d3.selectAll(".continuous_area").style("fill-opacity",.5);
+      
+      document.getElementById("slider-box").style.visibility="hidden";
+    }
+
+    function filter(glyphs, selected_category, selected_value, target_value) {
+      console.log(selected_category, selected_value, target_value);
+      
+      //filter circles in continuous glyphs
+      /*
+      glyphs.selectAll("circle").style("fill", function(d) {
+        if (d!= undefined && d[selected_category] == selected_value && d[target_variable] == target_value) {
+          return color(loaded_data[this.attributes.position.value][target_variable]);
+        } else {
+          return "grey"
+        }
+      }).style("fill-opacity", function(d) {
+        if (d!= undefined && d[selected_category] == selected_value && d[target_variable] == target_value) {
+          return .4;
+        } else {
+          return .1
+        }
+      });
+      */
+      if(target_value=="Yes"){
+        bin_filter_class = ".bin.target_positive.filtered";
+        bin_hide_class = ".bin.target_negative.filtered";
+        line_filter_class = ".line.target_positive.filtered";
+        line_hide_class = ".line.target_negative.filtered";
+      }else if (target_value=="No"){
+        bin_filter_class = ".bin.target_negative.filtered";
+        bin_hide_class = ".bin.target_positive.filtered";
+        line_filter_class = ".line.target_negative.filtered";
+        line_hide_class = ".line.target_positive.filtered";
+      }
+
+      //filter lines in continuous glyphs
+      glyphs.selectAll(".continuous_area").style("fill-opacity",.2);
+
+      glyphs.selectAll(line_filter_class).transition().duration(500).attr("x1",function(){
+        var category = this.attributes.category.value;
+        var value = this.attributes.value.value;
+        var number_of_elements = this.attributes.number_of_elements.value;
+        var counter = 0;
+        var original_starting_position = this.attributes.original_starting_position.value;
+        var original_ending_position = this.attributes.original_ending_position.value
+
+        for (var i = 0; i < loaded_data.length; i++) {
+          if(loaded_data[i][selected_category] == selected_value && loaded_data[i][category] == value && loaded_data[i][target_variable] == target_value){
+            counter++;
+          }
+        };
+        if(target_value=="Yes"){
+          return Number(original_ending_position)-Number(this.attributes.original_length.value)*(counter/number_of_elements);
+        } else if(target_value=="No"){
+          return Number(original_ending_position)+Number(this.attributes.original_length.value)*(counter/number_of_elements);
+        }
+      });
+      glyphs.selectAll(line_hide_class).transition().duration(500).attr("x1",function(){
+        return this.attributes.original_ending_position.value
+      });
+
+      //filter bins
+      glyphs.selectAll(bin_filter_class).transition().duration(500).attr("width", function(){
+        var category = this.attributes.category.value;
+        var value = this.attributes.value.value;
+        var number_of_elements = this.attributes.number_of_elements.value;
+        var counter = 0;
+        for (var i = 0; i < loaded_data.length; i++) {
+          if(loaded_data[i][selected_category] == selected_value && loaded_data[i][category] == value && loaded_data[i][target_variable] == target_value){
+            counter++;
+          }
+        };
+        return this.attributes.original_width.value*(counter/number_of_elements);
+      });
+      glyphs.selectAll(bin_hide_class).transition().duration(500).attr("width",0);
+    }
+
+    function apply_numerical_filter() {
+      var selected_category = $("#numerical_category").val();
+      var min = $("#slider-range").slider("values", 0);
+      var max = $("#slider-range").slider("values", 1);
+      
+      /*
+      d3.selectAll("circle").style("fill", function(d) {
+        if (d[selected_category] >= min && d[selected_category] <= max) {
+          return color(loaded_data[this.attributes.position.value][target_variable]);
+        } else {
+          return "grey"
+        }
+      }).style("fill-opacity", function(d) {
+        if (d[selected_category] >= min && d[selected_category] <= max) {
+          return .4;
+        } else {
+          return .1
+        }
+      });
+      */
+
+      d3.selectAll(".line.target_positive.filtered").transition().duration(500).attr("x1",function(){
+        var category = this.attributes.category.value;
+        var value = this.attributes.value.value;
+        var number_of_elements = this.attributes.number_of_elements.value;
+        var counter = 0;
+        var original_starting_position = this.attributes.original_starting_position.value;
+        var original_ending_position = this.attributes.original_ending_position.value
+
+        for (var i = 0; i < loaded_data.length; i++) {
+          if(loaded_data[i][selected_category] >= min && loaded_data[i][selected_category] <= max && loaded_data[i][category] == value && loaded_data[i][target_variable] == "Yes"){
+            counter++;
+          }
+        };
+          return Number(original_ending_position)-Number(this.attributes.original_length.value)*(counter/number_of_elements);
+      });
+
+      d3.selectAll(".line.target_negative.filtered").transition().duration(500).attr("x1",function(){
+        var category = this.attributes.category.value;
+        var value = this.attributes.value.value;
+        var number_of_elements = this.attributes.number_of_elements.value;
+        var counter = 0;
+        var original_starting_position = this.attributes.original_starting_position.value;
+        var original_ending_position = this.attributes.original_ending_position.value
+
+        for (var i = 0; i < loaded_data.length; i++) {
+          if(loaded_data[i][selected_category] >= min && loaded_data[i][selected_category] <= max && loaded_data[i][category] == value && loaded_data[i][target_variable] == "No"){
+            counter++;
+          }
+        };
+          return Number(original_ending_position)+Number(this.attributes.original_length.value)*(counter/number_of_elements);
+      });
+
+      d3.selectAll(".bin.filtered.target_positive").transition().duration(500).attr("width", function(){
+        var category = this.attributes.category.value;
+        var value = this.attributes.value.value;
+        var number_of_elements = this.attributes.number_of_elements.value;
+        var counter = 0;
+        for (var i = 0; i < loaded_data.length; i++) {
+          if(loaded_data[i][selected_category] >= min && loaded_data[i][selected_category] <= max && loaded_data[i][category] == value && loaded_data[i][target_variable] == "Yes"){
+            counter++;
+          }
+        };
+        console.log(category,value,number_of_elements,counter);
+        return this.attributes.original_width.value*(counter/number_of_elements);
+      });
+
+      d3.selectAll(".bin.filtered.target_negative").transition().duration(500).attr("width", function(){
+        var category = this.attributes.category.value;
+        var value = this.attributes.value.value;
+        var number_of_elements = this.attributes.number_of_elements.value;
+        var counter = 0;
+        for (var i = 0; i < loaded_data.length; i++) {
+          if(loaded_data[i][selected_category] >= min && loaded_data[i][selected_category] <= max && loaded_data[i][category] == value && loaded_data[i][target_variable] == "No"){
+            counter++;
+          }
+        };
+        console.log(category,value,number_of_elements,counter);
+        return this.attributes.original_width.value*(counter/number_of_elements);
+      });
+
+    }
+
+    function zooming(svg,glyphs,d,html_element) {
+      var already_zoomed = svg.select(".detail");
+      var selected_category = html_element.attributes.category.value;
+      var highlight_rectangle = glyphs.selectAll("rect").filter("." + selected_category);
+      if(already_zoomed.size() == 0){ 
+        var make_copy = svg.select(".miniscatter."+selected_category).node();
+        d3.select(make_copy.parentNode.insertBefore(make_copy.cloneNode(true),make_copy.nextSibling)).classed("detail",true);
+        detailed_view = svg.select(".detail");
+
+        detailed_view.selectAll(".bin.target_positive").on("click", function(d) {
+          var selected_value = this.attributes.value.value;
+          var selected_category = this.attributes.category.value;
+          filter(glyphs, selected_category, selected_value, "Yes");
+        })
+
+        detailed_view.selectAll(".bin.target_negative").on("click", function(d) {
+          var selected_value = this.attributes.value.value;
+          var selected_category = this.attributes.category.value;
+          filter(glyphs, selected_category, selected_value, "No");
+        })
+
+        detailed_view.on("dblclick", function(d) {
+          glyphs.selectAll(".selected").style("stroke", "#aaa").style("stroke-width", 1.5).classed("selected", false); 
+          detailed_view.remove();
+        });
+        detailed_view.transition().duration(200)
+        .attr("transform", function(){
+          var scale_ratio = (160*3.5/this.attributes.size.value);
+          return "translate(980,0)scale(3.5," + scale_ratio + ")"
+        });
+        highlight_rectangle.style("stroke", "red").style("stroke-width", 5.5).classed("selected", true);
+      }else{
+        svg.select(".detail").remove();
+        zooming(svg,glyphs,d,html_element);  
+        glyphs.selectAll(".selected").style("stroke", "#aaa").style("stroke-width", 1.5).classed("selected", false); 
+        highlight_rectangle.style("stroke", "red").style("stroke-width", 5.5).classed("selected", true);
+        //already_zoomed.classed("zoomed",false);
+      }
+      //filter(glyphs, selected_category, selected_value, "Yes");
+    }
+
+    function sort_glyphs(dataset,order) {
+      if (order == "data_type") {
+        if(dataset == "income"){
+          return ["age", "wage_per_hour", "capital_gains", "capital_losses", "divdends_from_stocks", "detailed_household_summary_in_household", "num_persons_worked_for_employer", "weeks_worked_in_year", "class_of_worker", "industry_code", "occupation_code", "education", "enrolled_in_edu_inst_last_wk", "marital_status", "major_industry_code", "major_occupation_code", "race", "hispanic_Origin", "sex", "member_of_a_labor_union", "reason_for_unemployment", "full_or_part_time_employment_stat", "tax_filer_status", "region_of_previous_residence", "state_of_previous_residence", "detailed_household_and_family_stat", "migration_code-change_in_msa", "migration_code-change_in_reg", "migration_code-move_within_reg", "live_in_this_house_1_year_ago", "migration_prev_res_in_sunbelt", "family_members_under_18", "country_of_birth_father", "country_of_birth_mother", "country_of_birth_self", "citizenship", "own_business_or_self_employed", "fill_inc_questionnaire_for_veteran's_admin", "veterans_benefits", "year"]//,"instance_weight"]
+        } else if(dataset == "diabetes"){
+          return ["num_lab_procedures", "num_medications", "diag_1", "diag_2", "diag_3", "admission_type_id", "discharge_disposition_id", "rosiglitazone", "time_in_hospital", "num_procedures", "number_outpatient", "number_emergency", "number_inpatient", "number_diagnoses", "race", "payer_code", "glipizide-metformin", "readmitted", "admission_source_id", "max_glu_serum", "A1Cresult", "metformin", "glimepiride-pioglitazone", "nateglinide", "chlorpropamide", "glimepiride", "acetohexamide", "glipizide", "glyburide", "tolbutamide", "pioglitazone", "medical_specialty", "acarbose", "miglitol", "troglitazone", "tolazamide", "examide", "insulin", "citoglipton", "glyburide-metformin", "age", "repaglinide", "metformin-rosiglitazone", "metformin-pioglitazone", "change", target_variable, "gender"];
+        }
+      } else if (order == "cardinality") {
+        return Object.keys(loaded_data[0])
+      }else{
+        return Object.keys(loaded_data[0])
+      }
+    }
+  </script>
+</body>
+
+</html>
